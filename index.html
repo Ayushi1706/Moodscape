@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Moodscape — Paint Your Feelings</title>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,300;0,600;1,300;1,600&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+<header>
+  <h1 class="logo">Mood<em>scape</em></h1>
+  <p class="tagline">Type a feeling — see it in colour</p>
+</header>
+<div class="divider"></div>
+
+<main>
+  <section class="input-zone">
+    <p class="input-label">How are you feeling right now?</p>
+    <div class="input-wrap">
+      <input
+        id="mood-input"
+        type="text"
+        placeholder="e.g. calm and nostalgic…"
+        autocomplete="off"
+        maxlength="80"
+      />
+    </div>
+    <button class="btn-generate" id="gen-btn" onclick="generate()">
+      Paint My Mood
+    </button>
+    <div class="loading-dots" id="loader">
+      <div class="dot"></div>
+      <div class="dot"></div>
+      <div class="dot"></div>
+    </div>
+    <div class="suggestions">
+      <button class="sug-chip" onclick="setMood('calm and peaceful')">calm and peaceful</button>
+      <button class="sug-chip" onclick="setMood('excited and happy')">excited and happy</button>
+      <button class="sug-chip" onclick="setMood('melancholy and lonely')">melancholy and lonely</button>
+      <button class="sug-chip" onclick="setMood('romantic evening')">romantic evening</button>
+      <button class="sug-chip" onclick="setMood('mysterious and dark')">mysterious and dark</button>
+      <button class="sug-chip" onclick="setMood('warm and cozy')">warm and cozy</button>
+      <button class="sug-chip" onclick="setMood('nostalgic summer')">nostalgic summer</button>
+      <button class="sug-chip" onclick="setMood('anxious and stressed')">anxious and stressed</button>
+    </div>
+  </section>
+
+  <section id="result">
+    <div class="palette-header">
+      <div class="palette-name" id="palette-name"></div>
+      <div class="palette-mood-tag" id="palette-mood"></div>
+    </div>
+
+    <div class="swatches" id="swatches"></div>
+    <div class="strip" id="strip"></div>
+
+    <div class="hex-list" id="hex-list"></div>
+
+    <div class="export-row">
+      <button class="btn-outline" onclick="exportCSS()">Export CSS</button>
+      <button class="btn-outline" onclick="exportJSON()">Export JSON</button>
+      <button class="btn-outline" onclick="saveHistory()">Save to History</button>
+    </div>
+  </section>
+
+  <section class="history-section" id="history-section" style="display:none">
+    <div class="history-title">Past Moods</div>
+    <div class="history-list" id="history-list"></div>
+  </section>
+</main>
+
+<div class="copied-toast" id="toast">Copied!</div>
+
+<script>
+  let currentPalette = null;
+  let moodHistory = JSON.parse(localStorage.getItem('moodHistory') || '[]');
+
+  function setMood(text) {
+    document.getElementById('mood-input').value = text;
+    generate();
+  }
+
+  async function generate() {
+    const input = document.getElementById('mood-input').value.trim();
+    if (!input) { pulse(document.getElementById('mood-input')); return; }
+
+    const btn = document.getElementById('gen-btn');
+    const loader = document.getElementById('loader');
+    btn.disabled = true;
+    btn.style.display = 'none';
+    loader.classList.add('active');
+
+    try {
+      const res = await fetch(`/analyze?mood=${encodeURIComponent(input)}`);
+      const data = await res.json();
+
+      if (data.error) { alert(data.error); return; }
+
+      currentPalette = data;
+      renderPalette(data);
+
+    } catch(e) {
+      // Fallback: generate palette client-side if server not available
+      const data = clientFallback(input);
+      currentPalette = data;
+      renderPalette(data);
+    }
+
+    btn.disabled = false;
+    btn.style.display = '';
+    loader.classList.remove('active');
+  }
+
+  function clientFallback(text) {
+    let hash = 0;
+    for (let c of text) hash = (hash * 31 + c.charCodeAt(0)) & 0xffffffff;
+    const h = Math.abs(hash) % 360;
+    const palette = [];
+    for (let i = 0; i < 6; i++) {
+      const nh = (h + i * 40) % 360;
+      const s = 50 + (i * 7) % 30;
+      const l = 45 + (i * 8) % 30;
+      palette.push({ hex: hslToHex(nh, s, l), hsl: `hsl(${nh}, ${s}%, ${l}%)`, h: nh, s, l });
+    }
+    return { palette, mood: 'unique blend', palette_name: `Essence of ${text.slice(0,20)}`, input: text, matched: false, matched_words: [] };
+  }
+
+  function hslToHex(h, s, l) {
+    s /= 100; l /= 100;
+    const a = s * Math.min(l, 1 - l);
+    const f = n => { const k = (n + h / 30) % 12; const col = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1); return Math.round(255 * col).toString(16).padStart(2, '0'); };
+    return `#${f(0)}${f(8)}${f(4)}`;
+  }
+
+  function renderPalette(data) {
+    document.getElementById('palette-name').textContent = data.palette_name;
+    document.getElementById('palette-mood').textContent =
+      data.matched_words.length > 0
+        ? `detected: ${data.matched_words.join(' · ')}`
+        : 'unique colour profile';
+
+    const swatchesEl = document.getElementById('swatches');
+    swatchesEl.innerHTML = '';
+    const stripEl = document.getElementById('strip');
+    stripEl.innerHTML = '';
+    const hexListEl = document.getElementById('hex-list');
+    hexListEl.innerHTML = '';
+
+    data.palette.forEach((color, i) => {
+      const textColor = color.l > 55 ? '#1a1016' : '#f5f0eb';
+
+      // Swatch
+      const sw = document.createElement('div');
+      sw.className = 'swatch';
+      sw.style.background = color.hex;
+      sw.innerHTML = `<div class="swatch-info" style="color:${textColor}">${color.hex}<br>${color.hsl}</div>`;
+      sw.onclick = () => copyToClipboard(color.hex);
+      sw.style.opacity = '0';
+      sw.style.transform = 'scaleY(0.7)';
+      swatchesEl.appendChild(sw);
+      setTimeout(() => {
+        sw.style.transition = `opacity 0.4s ease ${i*0.07}s, transform 0.4s ease ${i*0.07}s, transform 0.2s ease`;
+        sw.style.opacity = '1';
+        sw.style.transform = 'scaleY(1)';
+      }, 30);
+
+      // Strip
+      const seg = document.createElement('div');
+      seg.className = 'strip-seg';
+      seg.style.background = color.hex;
+      stripEl.appendChild(seg);
+
+      // Hex tag
+      const tag = document.createElement('button');
+      tag.className = 'hex-tag';
+      tag.innerHTML = `<div class="hex-dot" style="background:${color.hex}"></div>${color.hex}`;
+      tag.onclick = () => copyToClipboard(color.hex);
+      tag.title = 'Click to copy';
+      hexListEl.appendChild(tag);
+    });
+
+    const resultEl = document.getElementById('result');
+    resultEl.classList.add('visible');
+    resultEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).catch(() => {});
+    const toast = document.getElementById('toast');
+    toast.textContent = `Copied ${text}`;
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 1800);
+  }
+
+  function exportCSS() {
+    if (!currentPalette) return;
+    let css = `/* Moodscape — "${currentPalette.input}" */\n/* Mood: ${currentPalette.mood} */\n\n:root {\n`;
+    currentPalette.palette.forEach((c, i) => {
+      css += `  --mood-color-${i + 1}: ${c.hex};\n`;
+    });
+    css += `}`;
+    downloadFile('moodscape-palette.css', css);
+  }
+
+  function exportJSON() {
+    if (!currentPalette) return;
+    const out = {
+      input: currentPalette.input,
+      mood: currentPalette.mood,
+      name: currentPalette.palette_name,
+      colors: currentPalette.palette.map(c => ({ hex: c.hex, hsl: c.hsl }))
+    };
+    downloadFile('moodscape-palette.json', JSON.stringify(out, null, 2));
+  }
+
+  function downloadFile(name, content) {
+    const blob = new Blob([content], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+  }
+
+  function saveHistory() {
+    if (!currentPalette) return;
+    moodHistory.unshift({
+      input: currentPalette.input,
+      name: currentPalette.palette_name,
+      colors: currentPalette.palette.slice(0, 5).map(c => c.hex)
+    });
+    moodHistory = moodHistory.slice(0, 8);
+    localStorage.setItem('moodHistory', JSON.stringify(moodHistory));
+    renderHistory();
+    const toast = document.getElementById('toast');
+    toast.textContent = 'Saved to history ✓';
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 1800);
+  }
+
+  function renderHistory() {
+    if (moodHistory.length === 0) return;
+    document.getElementById('history-section').style.display = '';
+    const list = document.getElementById('history-list');
+    list.innerHTML = '';
+    moodHistory.forEach(item => {
+      const div = document.createElement('div');
+      div.className = 'history-item';
+      div.onclick = () => {
+        document.getElementById('mood-input').value = item.input;
+        generate();
+      };
+      const miniPalette = item.colors.map(hex =>
+        `<div class="history-mini-swatch" style="background:${hex}"></div>`
+      ).join('');
+      div.innerHTML = `
+        <div class="history-mini-palette">${miniPalette}</div>
+        <div class="history-text">${item.input}</div>
+      `;
+      list.appendChild(div);
+    });
+  }
+
+  function pulse(el) {
+    el.style.borderColor = '#c94c2e';
+    setTimeout(() => el.style.borderColor = '', 600);
+  }
+
+  document.getElementById('mood-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') generate();
+  });
+
+  renderHistory();
+</script>
+</body>
+</html>
