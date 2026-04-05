@@ -63,7 +63,3 @@ moodscape/
 - ✅ Offline-capable with client-side fallback
 
 ---
-
-## License
-
-MIT — free to use, modify, and share.
